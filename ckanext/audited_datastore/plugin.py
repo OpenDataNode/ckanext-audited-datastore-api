@@ -26,6 +26,7 @@ _validate = ckan.lib.navl.dictization_functions.validate
 LAST_MODIFIED_COLUMN = 'modified_timestamp'
 DELETED_TIME_COLUMN = 'deleted_timestamp'
 UPDATE_TIMESTAMP_FIELD = 'update_time'
+CHUNK_UPSERT_NUMBER = 100000
 
 # ==================== AUTH methods ====================
 
@@ -55,11 +56,58 @@ def audited_datastore_create(context, data_dict=None):
     if re.compile('[+-]\d\d:\d\d$').search(update_time):
         update_time = to_timestamp_naive(update_time)
     
-    for record in data_dict['records']:
+    records = data_dict.pop('records', [])
+    # first create
+    get_action('datastore_create')(context, data_dict)   
+    
+    
+    data_dict['connection_url'] = pylons.config['ckan.datastore.write_url']
+    engine = db._get_engine(data_dict)
+    context['connection'] = engine.connect()
+    timeout = context.get('query_timeout', db._TIMEOUT)
+    trans = context['connection'].begin()
+    
+    start = datetime.utcnow()
+    
+    # upsert 
+    chunk_index = 1
+    records_size = len(records)
+    chunk_num = records_size / CHUNK_UPSERT_NUMBER
+    if records_size % CHUNK_UPSERT_NUMBER > 0 :
+        chunk_num += 1
+    
+    records_chunk = []
+    num_records = 0
+    response = None
+    for record in records:
         record[LAST_MODIFIED_COLUMN] = update_time
         record[DELETED_TIME_COLUMN] = None
+        records_chunk.append(record)
+        num_records += 1 
+        if num_records >= CHUNK_UPSERT_NUMBER:
+            log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
+            insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
+            response = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+            records_chunk = []
+            num_records = 0
+            chunk_index += 1
     
-    return get_action('datastore_create')(context, data_dict)   
+    # insert the leftover records
+    if records_chunk:
+        log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
+        insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
+        response = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+    
+    trans.commit()
+    context['connection'].close()
+    
+    end = datetime.utcnow()
+    log.debug("create [db] lasted = {0}".format(end - start))
+    
+    response.pop('records', None)
+    response.pop('connection_url', None)
+    response['created'] = records_size
+    return response
     
 
 def audited_datastore_update(context, data_dict=None):
@@ -99,7 +147,8 @@ def audited_datastore_update(context, data_dict=None):
     result = do_audit(context, data_dict, records, update_time)
 
     result.pop('id', None)
-    result.pop('connection_url')
+    result.pop('records', None)
+    result.pop('connection_url', None)
     return result
     
     
@@ -151,7 +200,6 @@ def transaction_search(context, data_dict, timeout):
 def transaction_upsert(context, data_dict, timeout, trans):
     try:
         db.upsert_data(context, data_dict)
-        trans.commit()
         return db._unrename_json_field(data_dict)
     except IntegrityError, e:
         if e.orig.pgcode == db._PG_ERR_CODE['unique_violation']:
@@ -179,8 +227,6 @@ def transaction_upsert(context, data_dict, timeout, trans):
     except Exception, e:
         trans.rollback()
         raise
-    finally:
-        context['connection'].close()
 
 
 def transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys):
@@ -236,8 +282,23 @@ def do_audit(context, data_dict, new_records, update_time):
     log.debug('starting UPSERT phase')
     data_dict.pop('__junk', None)
     
-    return transaction_upsert(context, data_dict, timeout, trans)
+    start = datetime.utcnow()
+    result = transaction_upsert(context, data_dict, timeout, trans)
+    trans.commit()
+    end = datetime.utcnow()
+    log.debug("upsert [db] lasted = {0}".format(end - start))
+    
+    result['changed'] = len(data_dict.get('records',[]))
+    return result
 
+
+def get_upsert_data_dict(data_dict, records, method=db._UPSERT):
+    return {
+        'resource_id': data_dict.get('resource_id', None),
+        'records': records,
+        'force': data_dict.get('force', False),
+        'method': method
+    }
 
 def should_update(old_record, new_record):
     del_ts = old_record.pop(DELETED_TIME_COLUMN)
