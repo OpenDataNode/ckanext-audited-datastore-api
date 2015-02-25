@@ -46,7 +46,6 @@ def audited_datastore_create(context, data_dict=None):
     log.debug('starting: audited_datastore_create')
     
     check_and_bust('fields', data_dict)
-    check_and_bust('records', data_dict)
 
     data_dict['fields'].append({"id": LAST_MODIFIED_COLUMN, "type": "timestamp"})
     data_dict['fields'].append({"id": DELETED_TIME_COLUMN, "type": "timestamp"})
@@ -58,55 +57,55 @@ def audited_datastore_create(context, data_dict=None):
     
     records = data_dict.pop('records', [])
     # first create
-    get_action('datastore_create')(context, data_dict)   
+    response = get_action('datastore_create')(context, data_dict)
+    records_size = 0
     
-    
-    data_dict['connection_url'] = pylons.config['ckan.datastore.write_url']
-    engine = db._get_engine(data_dict)
-    context['connection'] = engine.connect()
-    timeout = context.get('query_timeout', db._TIMEOUT)
-    trans = context['connection'].begin()
-    
-    start = datetime.utcnow()
-    
-    # upsert 
-    chunk_index = 1
-    records_size = len(records)
-    chunk_num = records_size / CHUNK_UPSERT_NUMBER
-    if records_size % CHUNK_UPSERT_NUMBER > 0 :
-        chunk_num += 1
-    
-    records_chunk = []
-    num_records = 0
-    response = None
-    for record in records:
-        record[LAST_MODIFIED_COLUMN] = update_time
-        record[DELETED_TIME_COLUMN] = None
-        records_chunk.append(record)
-        num_records += 1 
-        if num_records >= CHUNK_UPSERT_NUMBER:
+    if data_dict.get('records', None):
+        data_dict['connection_url'] = pylons.config['ckan.datastore.write_url']
+        engine = db._get_engine(data_dict)
+        context['connection'] = engine.connect()
+        timeout = context.get('query_timeout', db._TIMEOUT)
+        trans = context['connection'].begin()
+        
+        start = datetime.utcnow()
+        
+        # upsert 
+        chunk_index = 1
+        records_size = len(records)
+        chunk_num = records_size / CHUNK_UPSERT_NUMBER
+        if records_size % CHUNK_UPSERT_NUMBER > 0 :
+            chunk_num += 1
+        
+        records_chunk = []
+        num_records = 0
+        for record in records:
+            record[LAST_MODIFIED_COLUMN] = update_time
+            record[DELETED_TIME_COLUMN] = None
+            records_chunk.append(record)
+            num_records += 1 
+            if num_records >= CHUNK_UPSERT_NUMBER:
+                log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
+                insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
+                transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+                records_chunk = []
+                num_records = 0
+                chunk_index += 1
+        
+        # insert the leftover records
+        if records_chunk:
             log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
             insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
-            response = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
-            records_chunk = []
-            num_records = 0
-            chunk_index += 1
+            transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+        
+        trans.commit()
+        context['connection'].close()
+        
+        end = datetime.utcnow()
+        log.debug("create [db] lasted = {0}".format(end - start))
     
-    # insert the leftover records
-    if records_chunk:
-        log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
-        insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
-        response = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+        data_dict.pop('connection_url', None)
     
-    trans.commit()
-    context['connection'].close()
-    
-    end = datetime.utcnow()
-    log.debug("create [db] lasted = {0}".format(end - start))
-    
-    response.pop('records', None)
-    response.pop('connection_url', None)
-    response['created'] = records_size
+    response['created_records'] = records_size
     return response
     
 
@@ -283,12 +282,31 @@ def do_audit(context, data_dict, new_records, update_time):
     data_dict.pop('__junk', None)
     
     start = datetime.utcnow()
-    result = transaction_upsert(context, data_dict, timeout, trans)
+    method = data_dict.get('method', db._UPSERT)
+    if db._INSERT in method:
+        # insert needs to be done in chunks
+        i = 0
+        result = {}
+        records_num = len(data_dict.get('records',[]))
+        chunk_index = 1
+        chunk_num = records_num / CHUNK_UPSERT_NUMBER
+        if records_num % CHUNK_UPSERT_NUMBER > 0 :
+            chunk_num += 1
+        
+        while i < records_num:
+            records = data_dict.get('records',[])[i:i+CHUNK_UPSERT_NUMBER]
+            insert_chunk_data_dict = get_upsert_data_dict(data_dict, records, method)
+            log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
+            result = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+            i += CHUNK_UPSERT_NUMBER
+            chunk_index += 1
+    else:
+        result = transaction_upsert(context, data_dict, timeout, trans)
     trans.commit()
     end = datetime.utcnow()
     log.debug("upsert [db] lasted = {0}".format(end - start))
     
-    result['changed'] = len(data_dict.get('records',[]))
+    result['changed_records'] = len(data_dict.get('records',[]))
     return result
 
 
