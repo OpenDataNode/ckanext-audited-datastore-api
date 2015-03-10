@@ -60,7 +60,7 @@ def audited_datastore_create(context, data_dict=None):
     response = get_action('datastore_create')(context, data_dict)
     records_size = 0
     
-    if data_dict.get('records', None):
+    if records:
         data_dict['connection_url'] = pylons.config['ckan.datastore.write_url']
         engine = db._get_engine(data_dict)
         context['connection'] = engine.connect()
@@ -120,7 +120,7 @@ def audited_datastore_update(context, data_dict=None):
     
     schema = context.get('schema', dsschema.datastore_upsert_schema())
     schema.pop('__junk', None)
-    records = data_dict.pop('records', None)
+    records = data_dict.pop('records', [])
     update_time = data_dict.pop(UPDATE_TIMESTAMP_FIELD, str(datetime.utcnow()))
     
     if re.compile('[+-]\d\d:\d\d$').search(update_time):
@@ -341,16 +341,17 @@ def should_update(old_record, new_record):
 
 # TODO optimalize
 def pop_item(dict_list, primary_keys):
-
-    for i in range(len(dict_list)):
-        check = True
-        item = dict_list[i]
-        for pk in primary_keys.keys():
-            if item.get(pk) != primary_keys.get(pk):
-                check = False
-                break
-        if check:
-            return dict_list.pop(i)
+    
+    if dict_list:
+        for i in range(len(dict_list)):
+            check = True
+            item = dict_list[i]
+            for pk in primary_keys.keys():
+                if item.get(pk) != primary_keys.get(pk):
+                    check = False
+                    break
+            if check:
+                return dict_list.pop(i)
         
     return None
     
