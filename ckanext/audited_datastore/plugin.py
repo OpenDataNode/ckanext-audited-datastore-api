@@ -76,29 +76,32 @@ def audited_datastore_create(context, data_dict=None):
         if records_size % CHUNK_UPSERT_NUMBER > 0 :
             chunk_num += 1
         
-        records_chunk = []
-        num_records = 0
-        for record in records:
-            record[LAST_MODIFIED_COLUMN] = update_time
-            record[DELETED_TIME_COLUMN] = None
-            records_chunk.append(record)
-            num_records += 1 
-            if num_records >= CHUNK_UPSERT_NUMBER:
+        try:
+            records_chunk = []
+            num_records = 0
+            for record in records:
+                record[LAST_MODIFIED_COLUMN] = update_time
+                record[DELETED_TIME_COLUMN] = None
+                records_chunk.append(record)
+                num_records += 1 
+                if num_records >= CHUNK_UPSERT_NUMBER:
+                    log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
+                    insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
+                    transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+                    records_chunk = []
+                    num_records = 0
+                    chunk_index += 1
+            
+            # insert the leftover records
+            if records_chunk:
                 log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
                 insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
                 transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
-                records_chunk = []
-                num_records = 0
-                chunk_index += 1
-        
-        # insert the leftover records
-        if records_chunk:
-            log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
-            insert_chunk_data_dict = get_upsert_data_dict(data_dict, records_chunk, db._INSERT)
-            transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
-        
-        trans.commit()
-        context['connection'].close()
+                
+            trans.commit()
+        finally:
+            context['connection'].close()
+        # don't need to catch exception and rollback, it's done in the transaction_upsert method
         
         end = datetime.utcnow()
         log.debug("create [db] lasted = {0}".format(end - start))
@@ -212,12 +215,14 @@ def transaction_upsert(context, data_dict, timeout, trans):
             })
         raise
     except DataError, e:
+        trans.rollback()
         raise db.ValidationError({
             'data': e.message,
             'info': {
                 'orig': [str(e.orig)]
             }})
     except DBAPIError, e:
+        trans.rollback()
         if e.orig.pgcode == db._PG_ERR_CODE['query_canceled']:
             raise db.ValidationError({
                 'query': ['Query took too long']
@@ -266,43 +271,47 @@ def do_audit(context, data_dict, new_records, update_time):
 
     trans = context['connection'].begin()
     
-    primary_keys = db._get_unique_key(context, data_dict)
-    
-    # DO SEARCH
-    log.debug('starting SEARCH phase')
-    old_records = transaction_search(context, data_dict, timeout)
-    
-    # audit data
-    log.debug('starting AUDIT phase')
-    data_dict['records'] = []
-    transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys)
-              
-    # DO UPSERT
-    log.debug('starting UPSERT phase')
-    data_dict.pop('__junk', None)
-    
-    start = datetime.utcnow()
-    method = data_dict.get('method', db._UPSERT)
-    if db._INSERT in method:
-        # insert needs to be done in chunks
-        i = 0
-        result = {}
-        records_num = len(data_dict.get('records',[]))
-        chunk_index = 1
-        chunk_num = records_num / CHUNK_UPSERT_NUMBER
-        if records_num % CHUNK_UPSERT_NUMBER > 0 :
-            chunk_num += 1
+    try:
+        primary_keys = db._get_unique_key(context, data_dict)
         
-        while i < records_num:
-            records = data_dict.get('records',[])[i:i+CHUNK_UPSERT_NUMBER]
-            insert_chunk_data_dict = get_upsert_data_dict(data_dict, records, method)
-            log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
-            result = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
-            i += CHUNK_UPSERT_NUMBER
-            chunk_index += 1
-    else:
-        result = transaction_upsert(context, data_dict, timeout, trans)
-    trans.commit()
+        # DO SEARCH
+        log.debug('starting SEARCH phase')
+        old_records = transaction_search(context, data_dict, timeout)
+        
+        # audit data
+        log.debug('starting AUDIT phase')
+        data_dict['records'] = []
+        transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys)
+                  
+        # DO UPSERT
+        log.debug('starting UPSERT phase')
+        data_dict.pop('__junk', None)
+        
+        start = datetime.utcnow()
+        method = data_dict.get('method', db._UPSERT)
+        if db._INSERT in method:
+            # insert needs to be done in chunks
+            i = 0
+            result = {}
+            records_num = len(data_dict.get('records',[]))
+            chunk_index = 1
+            chunk_num = records_num / CHUNK_UPSERT_NUMBER
+            if records_num % CHUNK_UPSERT_NUMBER > 0 :
+                chunk_num += 1
+            
+            while i < records_num:
+                records = data_dict.get('records',[])[i:i+CHUNK_UPSERT_NUMBER]
+                insert_chunk_data_dict = get_upsert_data_dict(data_dict, records, method)
+                log.debug('insert chunk {0}/{1}'.format(chunk_index, chunk_num))
+                result = transaction_upsert(context, insert_chunk_data_dict, timeout, trans)
+                i += CHUNK_UPSERT_NUMBER
+                chunk_index += 1
+        else:
+            result = transaction_upsert(context, data_dict, timeout, trans)
+        trans.commit()
+    finally:
+        context['connection'].close()
+
     end = datetime.utcnow()
     log.debug("upsert [db] lasted = {0}".format(end - start))
     
