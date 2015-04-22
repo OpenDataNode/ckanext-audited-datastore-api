@@ -58,6 +58,11 @@ def audited_datastore_create(context, data_dict=None):
     records = data_dict.pop('records', [])
     # first create
     response = get_action('datastore_create')(context, data_dict)
+    
+    # this is needed when creating new resource in this step too
+    data_dict.pop('resource', None)
+    data_dict['resource_id'] = response['resource_id']
+    
     records_size = 0
     
     if records:
@@ -77,6 +82,9 @@ def audited_datastore_create(context, data_dict=None):
             chunk_num += 1
         
         try:
+            context['connection'].execute(
+                u'SET LOCAL statement_timeout TO {0}'.format(timeout))
+            
             records_chunk = []
             num_records = 0
             for record in records:
@@ -173,9 +181,6 @@ def transaction_search(context, data_dict, timeout):
     fields[:] = [field.get('id') for field in db._get_fields(context, data_dict)]
     try:
         # check if table already existes
-        context['connection'].execute(
-            u'SET LOCAL statement_timeout TO {0}'.format(timeout))
-        
         dict_search = {
             'resource_id': data_dict['resource_id'],
             'fields': fields
@@ -272,6 +277,9 @@ def do_audit(context, data_dict, new_records, update_time):
     trans = context['connection'].begin()
     
     try:
+        context['connection'].execute(
+            u'SET LOCAL statement_timeout TO {0}'.format(timeout))
+        
         primary_keys = db._get_unique_key(context, data_dict)
         
         # DO SEARCH
