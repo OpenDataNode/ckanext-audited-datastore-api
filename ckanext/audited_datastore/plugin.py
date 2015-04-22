@@ -139,7 +139,8 @@ def audited_datastore_update(context, data_dict=None):
     if errors:
         raise tk.ValidationError(errors)
 
-    _check_read_only(context, data_dict)
+    if not data_dict.pop('force', False):
+        _check_read_only(context, data_dict)
 
     data_dict['connection_url'] = pylons.config['ckan.datastore.write_url']
 
@@ -182,6 +183,7 @@ def transaction_search(context, data_dict, timeout):
     try:
         # check if table already existes
         dict_search = {
+            'connection_url': data_dict.get('connection_url', None),
             'resource_id': data_dict['resource_id'],
             'fields': fields
         }
