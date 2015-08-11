@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-version = '0.2.0'
+version = '1.1.2-SNAPSHOT'
 
 setup(
     name='ckanext-audited-datastore-api',
