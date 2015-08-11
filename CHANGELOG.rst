@@ -1,0 +1,22 @@
+---------
+Changelog
+---------
+
+v1.1.2 2015-8-11
+
+Bug fixes:
+ * Datastore resource not updating records properly if there are more than 100 records
+ * Changed i18n .po file name, so it wouldn't clash with the names of other CKAN plugins
+
+Notes:
+ * To unify versions with ODN releases, the version jumped from 0.2.0 to 1.1.2
+
+v0.2.0 2015-04-22
+
+Bug fixes:
+ * transition changes from CKAN v2.2.X to v2.3
+
+v0.1.3 2015-04-22
+
+Bug fixes:
+ * couldn't create resource in one step with making it datastore resource
