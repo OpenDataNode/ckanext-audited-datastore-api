@@ -174,20 +174,17 @@ def to_timestamp_naive(datetime_str):
 
 def check_and_bust(key, dict):
     if key not in dict or not dict[key]:
-        raise NotFound("Key '{0}' was not found or has no value set.".format(key))
+        raise NotFound(u"Key '{0}' was not found or has no value set.".format(key))
 
 
 def transaction_search(context, data_dict, timeout):
     fields = []
     fields[:] = [field.get('id') for field in db._get_fields(context, data_dict)]
     try:
-        # check if table already existes
-        dict_search = {
-            'connection_url': data_dict.get('connection_url', None),
-            'resource_id': data_dict['resource_id'],
-            'fields': fields
-        }
-        return db.search_data(context, dict_search)
+        select_columns = u', '.join([u'"{0}"'.format(field_id) for field_id in fields])
+        sql_string = u'SELECT {0} FROM "{1}"'.format(select_columns, data_dict['resource_id'])
+        
+        return format_to_array_of_dict(context['connection'].execute(sql_string), fields)
     except DBAPIError, e:
         if e.orig.pgcode == db._PG_ERR_CODE['query_canceled']:
             raise db.ValidationError({
@@ -204,6 +201,17 @@ def transaction_search(context, data_dict, timeout):
         context['connection'].close()
     
     return None
+
+
+def format_to_array_of_dict(rows, fields):
+    records = []
+    for row in rows:
+        record = {}
+        for field in fields:
+            record[field] = row[field]
+        
+        records.append(record)
+    return records        
 
 
 def transaction_upsert(context, data_dict, timeout, trans):
@@ -241,7 +249,7 @@ def transaction_upsert(context, data_dict, timeout, trans):
 
 
 def transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys):
-    for record in old_records['records']:
+    for record in old_records:
         pks = {}
         
         for pk in primary_keys:
