@@ -140,7 +140,11 @@ def audited_datastore_update(context, data_dict=None):
         raise tk.ValidationError(errors)
 
     if not data_dict.pop('force', False):
-        _check_read_only(context, data_dict)
+        if get_ckan_version(context) >= u"2.3":
+            resource_id = data_dict['resource_id']
+            _check_read_only(context, resource_id)
+        else:
+            _check_read_only(context, data_dict)
 
     data_dict['connection_url'] = pylons.config['ckan.datastore.write_url']
 
@@ -165,6 +169,10 @@ def audited_datastore_update(context, data_dict=None):
     
 
 # ==================== help methods ====================
+
+def get_ckan_version(context):
+    status = get_action('status_show')(context, None)
+    return status['ckan_version']    
 
 def to_timestamp_naive(datetime_str):
     from dateutil.parser import parse
