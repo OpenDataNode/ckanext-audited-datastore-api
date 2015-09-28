@@ -2,7 +2,12 @@
 Changelog
 ---------
 
-v1.1.2 2015-8-11
+v1.2.0 2015-09-28
+
+Bug fixes:
+ * fixed changed method parameters in CKAN version 2.3
+
+v1.1.2 2015-08-11
 
 Bug fixes:
  * Datastore resource not updating records properly if there are more than 100 records
