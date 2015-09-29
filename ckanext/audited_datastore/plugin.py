@@ -46,6 +46,7 @@ def audited_datastore_create(context, data_dict=None):
     log.debug('starting: audited_datastore_create')
     
     check_and_bust('fields', data_dict)
+    check_and_bust('primary_key', data_dict)
 
     data_dict['fields'].append({"id": LAST_MODIFIED_COLUMN, "type": "timestamp"})
     data_dict['fields'].append({"id": DELETED_TIME_COLUMN, "type": "timestamp"})
@@ -130,6 +131,7 @@ def audited_datastore_update(context, data_dict=None):
     schema.pop('__junk', None)
     records = data_dict.pop('records', [])
     update_time = data_dict.pop(UPDATE_TIMESTAMP_FIELD, str(datetime.utcnow()))
+    delete_absent = data_dict.pop('delete_absent', True)
     
     if re.compile('[+-]\d\d:\d\d$').search(update_time):
         update_time = to_timestamp_naive(update_time)
@@ -159,7 +161,7 @@ def audited_datastore_update(context, data_dict=None):
             u'Resource "{0}" was not found.'.format(res_id)
         ))
 
-    result = do_audit(context, data_dict, records, update_time)
+    result = do_audit(context, data_dict, records, update_time, delete_absent)
 
     result.pop('id', None)
     result.pop('records', None)
@@ -256,7 +258,8 @@ def transaction_upsert(context, data_dict, timeout, trans):
         raise
 
 
-def transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys):
+def transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys, delete_absent):
+    
     for record in old_records:
         pks = {}
         
@@ -266,7 +269,7 @@ def transaction_audit(context, data_dict, old_records, new_records, update_time,
         new_record = pop_item(new_records, pks)
     
         if not new_record:
-            if record[DELETED_TIME_COLUMN]:
+            if not delete_absent or record[DELETED_TIME_COLUMN]:
                 # already deleted
                 continue
             # delete
@@ -287,7 +290,7 @@ def transaction_audit(context, data_dict, old_records, new_records, update_time,
         data_dict['records'].append(new_record)
 
 
-def do_audit(context, data_dict, new_records, update_time):
+def do_audit(context, data_dict, new_records, update_time, delete_absent):
     engine = db._get_engine(data_dict)
     context['connection'] = engine.connect()
     timeout = context.get('query_timeout', db._TIMEOUT)
@@ -307,7 +310,7 @@ def do_audit(context, data_dict, new_records, update_time):
         # audit data
         log.debug('starting AUDIT phase')
         data_dict['records'] = []
-        transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys)
+        transaction_audit(context, data_dict, old_records, new_records, update_time, primary_keys, delete_absent)
                   
         # DO UPSERT
         log.debug('starting UPSERT phase')

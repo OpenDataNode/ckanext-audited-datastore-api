@@ -9,21 +9,25 @@ extension adds two new API calls:
 
 audited_datastore_create
 -------
-Wrapper on datastore_create API call. Adds two new timestamps:
+Wrapper on datastore_create API call. Adds two new timestamp columns / fields:
 
 * modified_timestamp
 * deleted_timestamp
 
 This API calls all the parameters as datastore_create and adds an optional parameter:
 
-* update_time (ISO date time) - time set to modified_timestamp when creating records (optional)
+* update_time (ISO date time) - time set to modified_timestamp when creating records (optional). If not given, system actual time will be used.
+* primary_key - changed to mandatory parameter (see datastore_create)
 
 audited_datastore_update
 -------
 Wrapper on datastore_upsert API call. Ensures that only changed records to be updated (The modified_timestamp
 to be set). For the missing records in given parameters, also sets the deleted_timestamp field.
 
-Adds the same optional parameter 'update_time'.
+Additional parameters:
+
+* update_time (ISO date time) - time set to modified_timestamp for records updated by this API call (optional). If not given, system actual time will be used.
+* delete_absent (boolean) - if True, records not present in the API request will be marked as deleted (optional, default value is True)
 
 In the response JSON, there are only records that were created/updated (have only modified_timestamp set) or
 'deleted' (have modified_timestamp and deleted_timestamp set).
