@@ -17,6 +17,7 @@ import re
 import sqlalchemy
 from sqlalchemy.exc import (IntegrityError, DBAPIError, DataError)
 from datetime import datetime
+from dateutil.parser import parse
 
 log = logging.getLogger('ckanext')
 
@@ -363,8 +364,18 @@ def should_update(old_record, new_record):
     # update if:
     #    1. column is different
     #    2. its 'deleted' record
-    if del_ts or cmp(old_record, new_record) != 0:
+    if del_ts: # or cmp(old_record, new_record) != 0:
         return True
+    
+    for key in new_record.keys():
+        new_record_field = new_record.get(key)
+        old_record_field = old_record.get(key, None)
+        
+        if isinstance(old_record_field, datetime):
+            new_record_field = parse(new_record_field)
+        
+        if cmp(new_record_field, old_record_field) != 0:
+            return True
     
     return False
 
