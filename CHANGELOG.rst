@@ -2,6 +2,15 @@
 Changelog
 ---------
 
+v1.2.1-SNAPSHOT 2015-10-01
+
+Bug fixes:
+ * "primary_key" parameter is mandatory when calling audited_datastore_create
+ * internal error while comparing timestamps
+
+Features:
+ * added paramter "delete_absent" (default value is True). When True records not present in the records will be deleted
+
 v1.2.0 2015-09-28
 
 Bug fixes:
